@@ -1,0 +1,78 @@
+import numpy as np
+import pandas as pd
+from keras.models import Sequential
+from keras.layers import Dense, LSTM
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings("ignore")
+
+class VolatilityPredictor():
+  def __init__(self):
+    pass
+  
+  def load_data(self, df):
+    self.df = df.dropna(axis=0).reset_index().drop(['index'], axis=1)
+    print('Data loaded.')
+  
+  def preprocess(self):
+    self.df['logreturns'] = np.float32(0)
+    for i in range(1, len(self.df)):
+      self.df['logreturns'][i] = np.log(self.df['Close'][i]/self.df['Adj Close'][i-1])
+    
+    self.df['daily_volatility'] = np.float32(0)
+    lrs = self.df['logreturns'].values
+    for i in range(len(self.df)):
+      self.df['daily_volatility'][i] = np.std(lrs[:i+1])
+    
+    self.df['10daily_volatility'] = self.df['daily_volatility']*10
+    print('Preprocessing complete.')
+
+  def convert(self, look_back):
+    self.X = np.array([[[]]])
+    self.y = np.array([])
+    for i in range(look_back*2, len(self.df)-look_back-1):
+      if self.X.shape[2] == 0:
+        self.X = np.concatenate((self.df['logreturns'].values[i:i+look_back].reshape((look_back,1)), self.df['10daily_volatility'].values[i:i+look_back].reshape(look_back,1)), axis=1).reshape((1,look_back,2))
+        self.y = np.array([self.df['10daily_volatility'][i+1]])
+      else:
+        self.X = np.concatenate((self.X, np.concatenate((self.df['logreturns'].values[i:i+look_back].reshape((look_back,1)), self.df['10daily_volatility'].values[i:i+look_back].reshape(look_back,1)), axis=1).reshape((1,look_back,2))), axis=0)
+        self.y = np.concatenate((self.y, np.array([self.df['10daily_volatility'][i+1]])))
+    print('Arrays created.')
+
+  def split_data(self):
+    self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(self.X, self.y)
+    print('Data split.')
+
+
+  def train_model(self, look_back, epochs):
+    self.model = Sequential()
+    self.model.add(LSTM(64, input_shape=(look_back,2), return_sequences=True))
+    self.model.add(LSTM(128, return_sequences=False))
+    self.model.add(Dense(256, activation='tanh'))
+    self.model.add(Dense(128, activation='tanh'))
+    self.model.add(Dense(64, activation='tanh'))
+    self.model.add(Dense(32, activation='sigmoid'))
+    self.model.add(Dense(4, activation='sigmoid'))
+    self.model.add(Dense(1, activation='sigmoid'))
+
+    self.model.compile(optimizer='adam', loss='mse')
+
+    self.model.fit(self.X_train, self.y_train, validation_split=0.2, epochs = epochs)
+    print('Model trained with look_back = ' + str(look_back) + ' and epochs = '+str(epochs)+'.')
+  
+  def retrain(self, epochs):
+    self.model.fit(self.X_train, self.y_train, validation_split=0.2, epochs = epochs)
+    print('Model retrained for '+str(epochs)+' epochs.')
+  
+  def predict(self, X):
+    return self.model.predict(X)/10
+  
+  def plot_error(self):
+    self.pred = self.model.predict(self.X_val)
+    self.dif = [(self.y_val[i] - self.pred[i][0])/10 for i in range(len(self.y_val))]
+    plt.rcParams["figure.figsize"] = (30,10)
+    plt.plot(self.dif)
+    plt.show()
+    print('Max absolute error: ' + str(100*(max(max(self.dif), abs(min(self.dif))))) + '%.')
+    print('Average Absolute Error:' + str(100*np.mean([abs(number) for number in self.dif])) + '%.')
